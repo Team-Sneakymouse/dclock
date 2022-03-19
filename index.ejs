@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta property="og:type" content="website" />
+		<meta property="og:url" content="https://dclock.rawb.tv/" />
+		<meta property="og:title" content="Monica's DClock" />
+		<meta property="og:description" content="<%= seconds %> seconds left~" />
+		<meta property="og:image" content="https://dclock.rawb.tv/assets/robMonica.png" />
+		<meta name="theme-color" content="#ED4AF3" />
+
+		<link rel="icon" type="image/png" href="assets/robMyGoodness.png" />
+		<title>DClock</title>
+		<style>
+			@font-face {
+				font-family: "blue-highway";
+				src: url("assets/blue-highway-d.ttf");
+			}
+			html,
+			body {
+				height: 100%;
+				margin: 0;
+				padding: 0;
+				overflow: hidden;
+			}
+			body {
+				font-family: blue-highway;
+				font-size: calc(100vw / 12 * 2.2);
+				color: rgb(237, 74, 243);
+				text-shadow: 2px 2px 4px rgb(163, 8, 168);
+				background-color: rgb(141, 218, 241);
+			}
+			.container {
+				display: flex;
+				justify-content: center;
+				align-items: center;
+				height: 100%;
+			}
+			#clock {
+				width: calc(100vw / 14 * 11);
+			}
+
+			* {
+				-moz-user-select: -moz-none;
+				-khtml-user-select: none;
+				-webkit-user-select: none;
+				-ms-user-select: none;
+				user-select: none;
+			}
+		</style>
+		<script type="text/javascript">
+			const doom = new Date(1735189200000);
+			var audio;
+
+			function init() {
+				updateClock();
+				setInterval(updateClock, 1000);
+			}
+
+			function updateClock() {
+				var now = new Date();
+				var diffMs = parseInt((doom - now) / 1000);
+				var string = diffMs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+				document.getElementById("clock").textContent = string;
+			}
+		</script>
+	</head>
+	<body onload="init()">
+		<div class="container">
+			<div id="clock"></div>
+		</div>
+	</body>
+</html>
