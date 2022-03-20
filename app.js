@@ -14,4 +14,4 @@ app.get('/', function (req, res) {
 	res.render('./index', { seconds: string });
 })
 
-app.listen(80);
+app.listen(80, () => console.log("Server started on port 80"));
