@@ -10,9 +10,7 @@ pocketbase.collection("lom2_magicspells").getOne("2joauwmh4zsos5p").then((doc) =
 	console.log("value is " + value);
 });
 pocketbase.collection("lom2_magicspells").subscribe("2joauwmh4zsos5p", (e) => {
-	console.log("Realtime update: " + e.record);
 	value = Number(e.record.value);
-	console.log("value is " + value);
 });
 
 const app = express();
@@ -25,10 +23,6 @@ app.use((req, res, next) => {
 	next();
 });
 
-
-
-
-
 app.use('/assets', express.static('assets'));
 app.use("/pb", express.static("node_modules/pocketbase/dist"));
 
@@ -36,7 +30,7 @@ app.set('view engine', 'ejs');
 app.set('views', ".");
 
 app.get('/', function (req, res) {
-	const doom = new Date(1735189200000 + value);
+	const doom = new Date(1735189200000 + value * 1000);
 	var now = new Date();
 	var diffMs = parseInt((doom - now) / 1000);
 	var string = diffMs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
