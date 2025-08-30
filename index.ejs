@@ -51,10 +51,10 @@
 		<script type="module" defer>
 			import PocketBase from '/pb/pocketbase.es.mjs'
 			const pb = new PocketBase("https://db.rawb.tv");
-			const data = await pb.collection("lom2_magicspells").getOne("2joauwmh4zsos5p");
-			let doom = new Date(1735189200000 + Number(data.value) * 1000);
-			pb.collection("lom2_magicspells").subscribe("2joauwmh4zsos5p", (e) => {
-				doom = new Date(1735189200000 + Number(e.record.value) * 1000);
+			const data = await pb.collection("settings").getOne("9195r6z2omp337a");
+			let doom = new Date(Number(data.value) * 1000);
+			pb.collection("settings").subscribe("9195r6z2omp337a", (e) => {
+				doom = new Date(Number(e.record.value) * 1000);
 			});
 
 			function updateClock() {
