@@ -51,22 +51,20 @@
 		<script type="module" defer>
 			import PocketBase from '/pb/pocketbase.es.mjs'
 			const pb = new PocketBase("https://db.rawb.tv");
-			const data = await pb.collection("settings").getOne("9195r6z2omp337a");
-			let doom = new Date(Number(data.value) * 1000);
-			pb.collection("settings").subscribe("9195r6z2omp337a", (e) => {
-				doom = new Date(Number(e.record.value) * 1000);
-			});
-
-			function updateClock() {
-				var now = new Date();
-				if (now > doom) location.reload(); // refresh page when clock times out
-				var diffMs = parseInt((doom - now) / 1000);
-				var string = diffMs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-				document.getElementById("clock").textContent = string;
+			// PocketBase owns the value and counts it down; just show the latest one.
+			function show(value) {
+				const seconds = Math.max(0, Math.floor(Number(value)));
+				if (!Number.isFinite(seconds)) return;
+				document.getElementById("clock").textContent = seconds.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 			}
-			
-			updateClock();
-			setInterval(updateClock, 1000);
+
+			// The server-rendered value stays if this fails; realtime still takes over.
+			try {
+				show((await pb.collection("settings").getOne("9195r6z2omp337a")).value);
+			} catch (error) {
+				console.error("Failed to load countdown:", error);
+			}
+			pb.collection("settings").subscribe("9195r6z2omp337a", (e) => show(e.record.value));
 		</script>
 	</head>
 	<body>

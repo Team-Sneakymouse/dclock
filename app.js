@@ -23,11 +23,9 @@ app.get('/', async function (req, res) {
 	try {
 		// Fetch on each request so embeds cannot retain a missed realtime update.
 		const doc = await pocketbase.collection("settings").getOne("9195r6z2omp337a", { requestKey: null });
-		const doom = new Date(Number(doc.value) * 1000);
-		if (!Number.isFinite(doom.getTime())) throw new Error("Invalid countdown deadline");
-		var now = new Date();
-		var diffMs = parseInt((doom - now) / 1000);
-		var string = diffMs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+		if (typeof doc.value !== "number" || !Number.isFinite(doc.value)) throw new Error("Invalid countdown value");
+		const seconds = Math.max(0, Math.floor(doc.value));
+		var string = seconds.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 		res.render('./index', { seconds: string });
 	} catch (error) {
 		console.error("Failed to load countdown:", error);
