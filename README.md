@@ -32,9 +32,10 @@ sent while disconnected are lost.
   starts a read. At most one read runs at a time, plus one follow-up when more changes arrived meanwhile. A failed
   read is retried after 1 s, doubling to 30 s, until one succeeds; the log says so when reads start failing and when
   they work again.
-- **Restores.** If the database goes backwards (restored from a backup, or Staging refreshed from a copy of Live), the
-  site picks up the older row at the next reconnect or notification, publishes it and logs a warning that the
-  version went back. No restart is needed. Open pages ignore the lower version and show it after a reload.
+- **Restores.** The site reads the Live database only. If that is ever restored from a backup (its version goes
+  backwards), restart the site, as well as the game servers: the site usually picks the older row up by itself and
+  logs a warning, but the cached value can briefly override a freshly loaded page, and open pages ignore the lower
+  version until they are reloaded.
 - **Half-open connections.** Every minute the site sends a notification on a private channel through its query
   pool. If it doesn't arrive on the listen connection within 10 seconds, the listener is replaced (and reads again),
   unless it reconnected meanwhile. A listener that hasn't been listening for 60 seconds (the subscription was never
