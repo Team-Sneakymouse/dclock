@@ -163,6 +163,18 @@ describe.skipIf(!appUrl || !adminUrl)("against PostgreSQL", () => {
 		expect(app.hub.size).toBe(0);
 	});
 
+	test("a notification only triggers a read: a stale payload never shows", async () => {
+		const events = new Events(`${base}/events`);
+		await events.until(4000);
+		// What a folded transaction (set 10, set 20, set 10 -> notifies 10, 20) looks like to a listener.
+		await admin`update sneakydclock.dclock set amount = 3000 returning pg_notify('sneakydclock', '99')`;
+		await events.until(3000);
+		expect(events.values).not.toContain(99);
+		await set(4000); // the next test starts from 4000
+		await events.until(4000);
+		await events.close();
+	});
+
 	test("after its connections are killed, a change made meanwhile still arrives", async () => {
 		const events = new Events(`${base}/events`);
 		await events.until(4000);

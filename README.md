@@ -21,8 +21,10 @@ SneakyDClock runs `pg_notify('sneakydclock', <new amount>)` on every change. The
 (250 ms doubling to 32 s), subscribes again and calls `onlisten`, where the site reads the amount again: notifications
 sent while disconnected are lost.
 
-- **Ordering.** Every value (a notification or a read) takes a ticket when it starts; a value older than the last
-  one published is dropped. So a read started at reconnect can't roll browsers back past a newer notification.
+- **Ordering.** A notification is only a cue to read the row: PostgreSQL delivers identical payloads of one
+  transaction only once (set 10, set 20, set 10 notifies 10, 20), so the payload can be stale. Every read takes a
+  ticket when it starts; a result older than the last one published is dropped, so an earlier read can't roll
+  browsers back past a later one.
 - **Half-open connections.** Every minute the site sends a notification on a private channel through its query
   pool. If it doesn't arrive on the listen connection within 10 seconds, the listener is replaced (and reads again).
 - **Slow clients.** Each SSE client holds at most one queued chunk and the newest pending value; Bun stops pulling
