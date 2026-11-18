@@ -6,7 +6,7 @@ import { createHub } from "./lib/hub.js";
 import { createListener } from "./lib/listener.js";
 import { renderPage } from "./lib/page.js";
 
-// SneakyDClock owns the amount (a single row) and runs pg_notify(CHANNEL, <amount>) on every change.
+// SneakyDClock owns the amount (a single row) and runs pg_notify(CHANNEL, <new version>) on every change.
 // This site only reads it, so its role needs nothing beyond select on that table.
 const CHANNEL = "sneakydclock";
 const HEARTBEAT_MS = 25_000;

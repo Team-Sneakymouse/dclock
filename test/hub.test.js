@@ -21,30 +21,46 @@ async function drain(reader) {
 const data = (text) => [...text.matchAll(/^data: (.*)$/gm)].map((match) => Number(match[1]));
 
 describe("publication order", () => {
-	test("a read that started before a notification can't overwrite it", () => {
+	test("reads that complete out of order never roll back", async () => {
 		const hub = createHub();
-		const read = hub.ticket(); // e.g. the read after a reconnect
-		expect(hub.publish(7, hub.ticket())).toBe(true); // a notification arrives meanwhile
-		expect(hub.publish(5, read)).toBe(false); // the read resolves with the older value
-		expect(hub.latest).toBe(7);
+		const reader = hub.stream().getReader();
+		// Three reads ran concurrently on the pool and saw versions 1, 3 and 2; they complete 3, 1, 2.
+		const reads = [0, 1, 2].map(() => Promise.withResolvers());
+		const published = reads.map((read) => read.promise.then(([value, version]) => hub.publish(value, version)));
+		reads[1].resolve([30, 3]);
+		reads[0].resolve([10, 1]);
+		reads[2].resolve([20, 2]);
+		expect(await Promise.all(published)).toEqual([false, true, false]);
+		expect(hub.latest).toBe(30);
+		expect(hub.version).toBe(3);
+		expect(data(await drain(reader))).toEqual([30]);
 	});
 
-	test("reads started before the listener dropped are discarded", () => {
+	test("the same version again is not published", () => {
 		const hub = createHub();
-		hub.publish(1, hub.ticket());
-		const read = hub.ticket();
+		expect(hub.publish(5, 0)).toBe(true);
+		expect(hub.publish(5, 0)).toBe(false);
+	});
+
+	test("live only between markLive and invalidate; versions still apply while not live", () => {
+		const hub = createHub();
+		expect(hub.publish(1, 1)).toBe(true);
+		expect(hub.live).toBe(false);
+		hub.markLive();
+		expect(hub.live).toBe(true);
 		hub.invalidate();
 		expect(hub.live).toBe(false);
-		expect(hub.publish(2, read)).toBe(false);
-		expect(hub.publish(3, hub.ticket())).toBe(true);
-		expect(hub.live).toBe(true);
+		expect(hub.publish(2, 1)).toBe(false);
+		expect(hub.publish(3, 2)).toBe(true);
+		expect(hub.latest).toBe(3);
 	});
 });
 
 describe("clients", () => {
 	test("get the latest value on connect only while it is current", async () => {
 		const hub = createHub();
-		hub.publish(42, hub.ticket());
+		hub.publish(42, 1);
+		hub.markLive();
 		const live = hub.stream().getReader();
 		expect(await drain(live)).toBe("retry: 5000\n\ndata: 42\n\n");
 
@@ -52,7 +68,7 @@ describe("clients", () => {
 		const stale = hub.stream().getReader();
 		expect(data(await drain(stale))).toEqual([]); // keeps its server-rendered value
 
-		hub.publish(43, hub.ticket());
+		hub.publish(43, 2);
 		expect(data(await drain(stale))).toEqual([43]);
 		expect(data(await drain(live))).toEqual([43]);
 	});
@@ -60,18 +76,21 @@ describe("clients", () => {
 	test("each value is sent once, and a repeated value isn't sent again", async () => {
 		const hub = createHub();
 		const reader = hub.stream().getReader();
+		let version = 0;
+		let received = "";
 		for (const value of [1, 2, 2, 3]) {
-			hub.publish(value, hub.ticket());
-			await drain(reader);
+			hub.publish(value, ++version);
+			received += await drain(reader);
 		}
-		hub.publish(3, hub.ticket());
+		expect(data(received)).toEqual([1, 2, 3]);
+		hub.publish(3, ++version);
 		expect(data(await drain(reader))).toEqual([]);
 	});
 
 	test("a client that stops reading holds one chunk and the newest value, then catches up", async () => {
 		const hub = createHub();
 		const stream = hub.stream(); // holds "retry: 5000", the one chunk it may queue, unread
-		for (let value = 1; value <= 10_000; value++) hub.publish(value, hub.ticket());
+		for (let value = 1; value <= 10_000; value++) hub.publish(value, value);
 		hub.heartbeat();
 		expect(await drain(stream.getReader())).toBe("retry: 5000\n\ndata: 10000\n\n");
 	});
@@ -79,14 +98,14 @@ describe("clients", () => {
 	test("a value that returns to what the client last got cancels its pending one", async () => {
 		const hub = createHub();
 		const stream = hub.stream(); // "retry" fills the queue; the client isn't reading
-		hub.publish(5, hub.ticket()); // pending
-		hub.publish(7, hub.ticket()); // replaces it
+		hub.publish(5, 1); // pending
+		hub.publish(7, 2); // replaces it
 		const reader = stream.getReader();
 		expect(decoder.decode((await reader.read()).value)).toBe("retry: 5000\n\n");
 		expect(decoder.decode((await reader.read()).value)).toBe("data: 7\n\n"); // the client has 7
-		hub.publish(9, hub.ticket()); // queued
-		hub.publish(8, hub.ticket()); // pending
-		hub.publish(9, hub.ticket()); // the client will have 9, which is current: nothing pending
+		hub.publish(9, 3); // queued
+		hub.publish(8, 4); // pending
+		hub.publish(9, 5); // the client will have 9, which is current: nothing pending
 		expect(data(await drain(reader))).toEqual([9]);
 	});
 

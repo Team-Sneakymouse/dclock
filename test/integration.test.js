@@ -1,6 +1,7 @@
 // Runs against a throwaway PostgreSQL only. Set both URLs to enable it:
 //   TEST_DATABASE_URL  the site's role (select on sneakydclock.dclock only)
-//   TEST_ADMIN_URL     a role that may update the table and end the site's connections (stands in for SneakyDClock)
+//   TEST_ADMIN_URL     a role that may update the table and end the site's connections (stands in for SneakyDClock:
+//                      every change raises the version and notifies it, as sneakydclock.adjust does)
 // The app connects through a local TCP proxy, so the tests can freeze a connection (like a paused database or a
 // dead network path) without touching the database container. See README ("Tests").
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -114,11 +115,11 @@ describe.skipIf(!appUrl || !adminUrl)("against PostgreSQL", () => {
 	const log = { log: (m) => logs.push(String(m)), error: (m) => logs.push(String(m)) };
 	const role = appUrl && decodeURIComponent(new URL(appUrl).username);
 	const set = (amount) =>
-		admin`update sneakydclock.dclock set amount = ${amount} returning pg_notify('sneakydclock', amount::text)`;
+		admin`update sneakydclock.dclock set amount = ${amount}, version = version + 1 returning pg_notify('sneakydclock', version::text)`;
 
 	beforeAll(async () => {
 		admin = new SQL(adminUrl, { max: 1 });
-		await admin`update sneakydclock.dclock set amount = 1234567.8`;
+		await admin`update sneakydclock.dclock set amount = 1234567.8, version = version + 1`;
 		const target = new URL(appUrl);
 		proxy = startProxy(target);
 		target.hostname = "127.0.0.1";
@@ -163,11 +164,10 @@ describe.skipIf(!appUrl || !adminUrl)("against PostgreSQL", () => {
 		expect(app.hub.size).toBe(0);
 	});
 
-	test("a notification only triggers a read: a stale payload never shows", async () => {
+	test("the amount always comes from the row; a payload that is no version still means changed", async () => {
 		const events = new Events(`${base}/events`);
 		await events.until(4000);
-		// What a folded transaction (set 10, set 20, set 10 -> notifies 10, 20) looks like to a listener.
-		await admin`update sneakydclock.dclock set amount = 3000 returning pg_notify('sneakydclock', '99')`;
+		await admin`update sneakydclock.dclock set amount = 3000, version = version + 1 returning pg_notify('sneakydclock', '99.5')`;
 		await events.until(3000);
 		expect(events.values).not.toContain(99);
 		await set(4000); // the next test starts from 4000
@@ -180,7 +180,7 @@ describe.skipIf(!appUrl || !adminUrl)("against PostgreSQL", () => {
 		await events.until(4000);
 		// Back to back, well before Bun's first reconnect attempt (250 ms).
 		await admin`select pg_terminate_backend(pid) from pg_stat_activity where usename = ${role}`;
-		await admin`update sneakydclock.dclock set amount = 3333`; // no notification
+		await admin`update sneakydclock.dclock set amount = 3333, version = version + 1`; // no notification
 		await events.until(3333);
 		await set(3000);
 		await events.until(3000);
@@ -190,10 +190,12 @@ describe.skipIf(!appUrl || !adminUrl)("against PostgreSQL", () => {
 	test("a half-open listen connection is replaced by the watchdog", async () => {
 		const events = new Events(`${base}/events`);
 		await events.until(3000);
+		const missed = () => logs.filter((m) => m.includes("missed its watchdog notification")).length;
+		const before = missed();
 		proxy.freeze(proxy.listenConnection());
 		await set(2000); // never reaches the frozen listener
 		await events.until(2000, 15_000);
-		expect(logs.some((m) => m.includes("missed its watchdog notification"))).toBe(true);
+		expect(missed()).toBe(before + 1);
 		await set(1000);
 		await events.until(1000);
 		await events.close();

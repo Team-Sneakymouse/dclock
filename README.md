@@ -16,20 +16,26 @@ and Server-Sent Events, Bun's built-in SQL client for queries and `LISTEN`.
 
 ## How updates reach browsers
 
-SneakyDClock runs `pg_notify('sneakydclock', <new amount>)` on every change. The site subscribes with `sql.listen()`
+SneakyDClock's `sneakydclock.adjust()` raises the row's `version` on every change and runs
+`pg_notify('sneakydclock', <new version>)`. The site subscribes with `sql.listen()`
 (added in Bun 1.4.0). Bun keeps that subscription on its own connection and, when it drops, reconnects with backoff
 (250 ms doubling to 32 s), subscribes again and calls `onlisten`, where the site reads the amount again: notifications
 sent while disconnected are lost.
 
-- **Ordering.** A notification is only a cue to read the row: PostgreSQL delivers identical payloads of one
-  transaction only once (set 10, set 20, set 10 notifies 10, 20), so the payload can be stale. Every read takes a
-  ticket when it starts; a result older than the last one published is dropped, so an earlier read can't roll
-  browsers back past a later one.
+- **Ordering.** Every read selects `amount, version`, and a value is published only if its version is greater than
+  the last published one. Reads on the pool may complete in any order; one that saw an older row never rolls
+  browsers back.
+- **When to read.** A notification naming a version newer than the published one (or a payload that is no version)
+  starts a read. At most one read runs at a time, plus one follow-up when more changes arrived meanwhile. A failed
+  read is retried after 1 s, doubling to 30 s, until one succeeds. Versions only grow: if the row is ever recreated
+  (version back to 0), restart the site.
 - **Half-open connections.** Every minute the site sends a notification on a private channel through its query
-  pool. If it doesn't arrive on the listen connection within 10 seconds, the listener is replaced (and reads again).
+  pool. If it doesn't arrive on the listen connection within 10 seconds, the listener is replaced (and reads again),
+  unless it reconnected meanwhile. A listener that hasn't been listening for 60 seconds (the subscription was never
+  acknowledged, or Bun's resubscribe after a disconnect is stuck) is replaced too.
 - **Slow clients.** Each SSE client holds at most one queued chunk and the newest pending value; Bun stops pulling
   a stream whose socket is full. A client that hasn't read for 60 seconds is disconnected.
-- **While the listener is down**, new SSE clients get no value until it is back, so they keep the fresh value the
+- **While the listener is down**, new SSE clients get no value until it is back and has read once, so they keep the fresh value the
   page was rendered with instead of a possibly stale one.
 
 SIGTERM ends the streams, stops the server and closes the database connections, so `docker stop` exits 0.
@@ -58,7 +64,7 @@ Dockerfile next to `package.json`.
 ## Tests
 
 ```sh
-bun test               # unit tests (page rendering and escaping, publication order, backpressure)
+bun test               # unit tests (page rendering and escaping, version order, read retries, listener bounds, backpressure)
 ```
 
 The integration tests run only when both URLs are set, and only against a throwaway database:
@@ -67,7 +73,7 @@ The integration tests run only when both URLs are set, and only against a throwa
 docker run -d --name dclock-test-pg -e POSTGRES_PASSWORD=test -p 127.0.0.1:55432:5432 postgres:17-alpine
 docker exec -i dclock-test-pg psql -U postgres <<'SQL'
 create schema sneakydclock;
-create table sneakydclock.dclock (id boolean primary key default true check (id), amount double precision not null check (amount >= 0));
+create table sneakydclock.dclock (id boolean primary key default true check (id), amount double precision not null check (amount >= 0), version bigint not null default 0);
 insert into sneakydclock.dclock (amount) values (0);
 create role dclock_web login password 'web';
 grant usage on schema sneakydclock to dclock_web;
@@ -79,4 +85,5 @@ TEST_ADMIN_URL=postgres://postgres:test@127.0.0.1:55432/postgres bun test
 
 They connect the app through a local TCP proxy so they can freeze connections, and cover: the rendered page,
 SSE updates, a change made while the site's connections were killed, the watchdog replacing a frozen listen
-connection, and 503 within the timeout while the database hangs, with recovery after.
+connection, and 503 within the timeout while the database hangs, with recovery after. The admin role stands in for
+SneakyDClock: its updates raise `version` and notify the new version, as `sneakydclock.adjust()` does.
