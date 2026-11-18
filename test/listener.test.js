@@ -7,7 +7,7 @@ const CHANNEL = "sneakydclock";
 // Stand-ins for Bun's SQL: `connect` makes listen connections the test can drop and resubscribe by hand, `db` is the
 // query pool (reads the row, sends watchdog pings to the newest listen connection).
 function setup({ ack = true, failReads = 0, echo = () => true, ...options } = {}) {
-	const state = { amount: 100, version: 1, reads: 0, failReads, connections: [], logs: [] };
+	const state = { amount: 100, version: 1, reads: 0, failReads, connections: [], logs: [], hold: false, held: [] };
 	const connect = (connectOptions) => {
 		const conn = {
 			closed: false,
@@ -33,6 +33,11 @@ function setup({ ack = true, failReads = 0, echo = () => true, ...options } = {}
 	};
 	const db = () => {
 		state.reads++;
+		if (state.hold) {
+			const read = Promise.withResolvers(); // the test resolves it with the rows the read saw
+			state.held.push(read);
+			return read.promise;
+		}
 		if (state.failReads > 0) {
 			state.failReads--;
 			return Promise.reject(new Error("connection refused"));
@@ -126,7 +131,44 @@ describe("listener", () => {
 		s.failReads = 3;
 		s.connections[0].notify("2");
 		await until(() => s.hub.latest === 50);
-		expect(s.logs.filter((m) => m.startsWith("Failed to read the amount")).length).toBe(3);
+		expect(s.logs.filter((m) => m.startsWith("Failed to read the amount")).length).toBe(1); // the first failure only
+		expect(s.logs).toContain("Read the amount again after 3 failed attempts");
+	});
+
+	test("a read that started before a disconnect is not published; the read after the reconnect is", async () => {
+		s = setup();
+		await until(() => s.hub.live);
+		expect(s.hub.version).toBe(1);
+		s.hold = true;
+		s.connections[0].notify("2");
+		await until(() => s.held.length === 1); // the read saw version 2
+		s.connections[0].drop(new Error("reset"));
+		// Version 3 commits; a browser renders it and joins SSE while the listener is down.
+		const client = s.hub.stream().getReader();
+		await client.read(); // "retry: 5000"
+		s.held.shift().resolve([{ amount: 50, version: "2" }]);
+		await Bun.sleep(20);
+		expect(s.hub.version).toBe(1);
+		expect(s.hub.latest).toBe(100);
+		expect(s.hub.live).toBe(false);
+
+		s.hold = false;
+		s.amount = 30;
+		s.version = 3;
+		s.connections[0].resubscribed();
+		await until(() => s.hub.version === 3);
+		expect(s.hub.live).toBe(true);
+		const { value } = await client.read();
+		expect(new TextDecoder().decode(value)).toBe('data: {"amount":30,"version":3}\n\n'); // never version 2
+	});
+
+	test("stop() ends a watchdog check that is waiting for its ping, so the process can exit", async () => {
+		s = null;
+		const started = performance.now();
+		const proc = Bun.spawn([process.execPath, `${import.meta.dir}/fixtures/watchdog-stop.js`], { stdout: "pipe" });
+		expect(await proc.exited).toBe(0);
+		expect(await new Response(proc.stdout).text()).toBe("stopped\n");
+		expect(performance.now() - started).toBeLessThan(5_000); // the watchdog would wait 10 s
 	});
 
 	test("stop leaves no retry timer that reads", async () => {

@@ -82,6 +82,7 @@ function startProxy({ hostname, port }) {
 class Events {
 	constructor(url) {
 		this.values = [];
+		this.versions = [];
 		this.controller = new AbortController();
 		this.done = fetch(url, { signal: this.controller.signal })
 			.then(async (response) => {
@@ -90,7 +91,11 @@ class Events {
 				for await (const chunk of response.body) {
 					buffer += decoder.decode(chunk);
 					const end = buffer.lastIndexOf("\n\n") + 2;
-					for (const match of buffer.slice(0, end).matchAll(/^data: (.*)$/gm)) this.values.push(Number(match[1]));
+					for (const match of buffer.slice(0, end).matchAll(/^data: (.*)$/gm)) {
+						const event = JSON.parse(match[1]);
+						this.values.push(event.amount);
+						this.versions.push(event.version);
+					}
 					buffer = buffer.slice(end);
 				}
 			})
@@ -148,7 +153,7 @@ describe.skipIf(!appUrl || !adminUrl)("against PostgreSQL", () => {
 		expect(response.status).toBe(200);
 		const html = await response.text();
 		expect(html).toContain('content="1,234,567 seconds left~"');
-		expect(html).toContain('<div id="clock">1,234,567</div>');
+		expect(html).toMatch(/<div id="clock" data-version="\d+">1,234,567<\/div>/);
 	});
 
 	test("SSE sends the amount on connect and every change", async () => {
@@ -213,6 +218,23 @@ describe.skipIf(!appUrl || !adminUrl)("against PostgreSQL", () => {
 		proxy.thawAll();
 		expect((await fetch(base)).status).toBe(200);
 		await events.until(999);
+		await events.close();
+	});
+
+	test("a restored row with a lower version is published with a warning, and the page renders it", async () => {
+		const events = new Events(`${base}/events`);
+		await events.until(999);
+		expect(events.versions.at(-1)).toBeGreaterThan(1);
+		// What a restore from an older backup leaves behind, followed by someone's adjust.
+		await admin`update sneakydclock.dclock set amount = 777, version = 1 returning pg_notify('sneakydclock', version::text)`;
+		await events.until(777);
+		expect(events.versions.at(-1)).toBe(1);
+		expect(logs.filter((m) => m.includes("version went back from")).length).toBe(1);
+		expect(await (await fetch(base)).text()).toContain('<div id="clock" data-version="1">777</div>');
+		await set(888);
+		await events.until(888);
+		expect(events.versions.at(-1)).toBe(2);
+		expect(logs.filter((m) => m.includes("version went back from")).length).toBe(1);
 		await events.close();
 	});
 

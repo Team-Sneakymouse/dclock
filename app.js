@@ -1,7 +1,7 @@
 import { SQL } from "bun";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { format, readSeconds } from "./lib/amount.js";
+import { format, readAmount } from "./lib/amount.js";
 import { createHub } from "./lib/hub.js";
 import { createListener } from "./lib/listener.js";
 import { renderPage } from "./lib/page.js";
@@ -46,7 +46,8 @@ export function startApp({
 		if (pendingReads >= maxPendingReads) return unavailable();
 		pendingReads++;
 		try {
-			const html = renderPage(format(await readSeconds(db, queryTimeoutMs)));
+			const row = await readAmount(db, queryTimeoutMs);
+			const html = renderPage(format(row.seconds), row.version);
 			return new Response(html, { headers: headers({ "Content-Type": "text/html; charset=utf-8" }) });
 		} catch (error) {
 			log.error(`Failed to load the amount: ${error.message}`);

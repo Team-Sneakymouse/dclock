@@ -10,7 +10,7 @@ and Server-Sent Events, Bun's built-in SQL client for queries and `LISTEN`.
 
 - `/` reads the amount on every request and renders it into the page (so Discord/OG embeds are current), floored
   and with thousands separators. It answers 503 if the database can't be read within 5 seconds.
-- `/events` is a Server-Sent Events stream: the current amount on connect, then every change, with a heartbeat
+- `/events` is a Server-Sent Events stream: the current amount and its version on connect, then every change, with a heartbeat
   comment every 25 seconds. The page keeps the server-rendered value if the stream fails.
 - `/assets/*` serves the files in `assets/`.
 
@@ -22,13 +22,19 @@ SneakyDClock's `sneakydclock.adjust()` raises the row's `version` on every chang
 (250 ms doubling to 32 s), subscribes again and calls `onlisten`, where the site reads the amount again: notifications
 sent while disconnected are lost.
 
-- **Ordering.** Every read selects `amount, version`, and a value is published only if its version is greater than
-  the last published one. Reads on the pool may complete in any order; one that saw an older row never rolls
-  browsers back.
-- **When to read.** A notification naming a version newer than the published one (or a payload that is no version)
+- **Ordering.** Every read selects `amount, version`. The site runs one read at a time, each started after the
+  previous one finished, so each read sees a row at least as new as the last, and it publishes every read that
+  started and finished while the same listen connection was up. A read that began before a disconnect is dropped;
+  the read after the reconnect takes over. Each SSE event carries the version
+  (`data: {"amount":<seconds>,"version":<n>}`), the page carries the version it was rendered with
+  (`<div id="clock" data-version="<n>">`), and the browser ignores an event that isn't newer than what it shows.
+- **When to read.** A notification naming a version other than the published one (or a payload that is no version)
   starts a read. At most one read runs at a time, plus one follow-up when more changes arrived meanwhile. A failed
-  read is retried after 1 s, doubling to 30 s, until one succeeds. Versions only grow: if the row is ever recreated
-  (version back to 0), restart the site.
+  read is retried after 1 s, doubling to 30 s, until one succeeds; the log says so when reads start failing and when
+  they work again.
+- **Restores.** If the database goes backwards (restored from a backup, or Staging refreshed from a copy of Live), the
+  site picks up the older row at the next reconnect or notification, publishes it and logs a warning that the
+  version went back. No restart is needed. Open pages ignore the lower version and show it after a reload.
 - **Half-open connections.** Every minute the site sends a notification on a private channel through its query
   pool. If it doesn't arrive on the listen connection within 10 seconds, the listener is replaced (and reads again),
   unless it reconnected meanwhile. A listener that hasn't been listening for 60 seconds (the subscription was never
@@ -64,7 +70,7 @@ Dockerfile next to `package.json`.
 ## Tests
 
 ```sh
-bun test               # unit tests (page rendering and escaping, version order, read retries, listener bounds, backpressure)
+bun test               # unit tests (page rendering and escaping, the browser's version check, when to read and retries, listener bounds, backpressure)
 ```
 
 The integration tests run only when both URLs are set, and only against a throwaway database:
@@ -85,5 +91,6 @@ TEST_ADMIN_URL=postgres://postgres:test@127.0.0.1:55432/postgres bun test
 
 They connect the app through a local TCP proxy so they can freeze connections, and cover: the rendered page,
 SSE updates, a change made while the site's connections were killed, the watchdog replacing a frozen listen
-connection, and 503 within the timeout while the database hangs, with recovery after. The admin role stands in for
+connection, 503 within the timeout while the database hangs, with recovery after, and a restored row with a lower
+version being published with a warning. The admin role stands in for
 SneakyDClock: its updates raise `version` and notify the new version, as `sneakydclock.adjust()` does.
