@@ -1,0 +1,4 @@
+[install]
+# Refuse package versions published fewer than 7 days ago (supply-chain quarantine), like min-release-age=7 in
+# .npmrc. The site has no dependencies today; this applies as soon as one is added, locally and in the image.
+minimumReleaseAge = 604800
