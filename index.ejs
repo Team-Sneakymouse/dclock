@@ -48,28 +48,24 @@
 				user-select: none;
 			}
 		</style>
-		<script type="module" defer>
-			import PocketBase from '/pb/pocketbase.es.mjs'
-			const pb = new PocketBase("https://db.rawb.tv");
-			// PocketBase owns the value and counts it down; just show the latest one.
+		<script type="module">
+			// The amount only changes when someone adjusts it; show the latest one the server sends.
 			function show(value) {
 				const seconds = Math.max(0, Math.floor(Number(value)));
 				if (!Number.isFinite(seconds)) return;
 				document.getElementById("clock").textContent = seconds.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 			}
 
-			// The server-rendered value stays if this fails; realtime still takes over.
-			try {
-				show((await pb.collection("settings").getOne("9195r6z2omp337a")).value);
-			} catch (error) {
-				console.error("Failed to load countdown:", error);
+			// The server-rendered value stays if this fails; EventSource reconnects on its own.
+			if ("EventSource" in window) {
+				const events = new EventSource("/events");
+				events.onmessage = (event) => show(event.data);
 			}
-			pb.collection("settings").subscribe("9195r6z2omp337a", (e) => show(e.record.value));
 		</script>
 	</head>
 	<body>
 		<div class="container">
-			<div id="clock"></div>
+			<div id="clock"><%= seconds %></div>
 		</div>
 	</body>
 </html>
